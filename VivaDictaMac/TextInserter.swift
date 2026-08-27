@@ -4,8 +4,12 @@ import ApplicationServices
 @MainActor
 enum TextInserter {
     static func isAccessibilityTrusted(prompt: Bool) -> Bool {
+        // Using the SDK's kAXTrustedCheckOptionPrompt global directly triggers
+        // Swift 6 strict-concurrency diagnostics because it is imported as
+        // shared mutable state. The Accessibility API key is a stable CFString
+        // value, so construct the options dictionary with its documented value.
         let options = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt
+            "AXTrustedCheckOptionPrompt": prompt
         ] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
