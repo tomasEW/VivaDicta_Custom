@@ -1,0 +1,74 @@
+name: Build VivaDictaMac
+
+on:
+  push:
+    branches:
+      - macos-native
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build macOS app
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project VivaDictaMac.xcodeproj \
+            -scheme VivaDictaMac
+
+      - name: Build Release app
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project VivaDictaMac.xcodeproj \
+            -scheme VivaDictaMac \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee xcodebuild.log
+
+      - name: Ad-hoc sign app
+        run: |
+          APP_PATH="$PWD/build/Build/Products/Release/VivaDictaMac.app"
+          test -d "$APP_PATH"
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Package app
+        run: |
+          APP_PATH="$PWD/build/Build/Products/Release/VivaDictaMac.app"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" VivaDictaMac-macOS-arm64.zip
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: VivaDictaMac-macOS-arm64
+          path: VivaDictaMac-macOS-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VivaDictaMac-build-log
+          path: xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 14
