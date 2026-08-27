@@ -1,0 +1,317 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		300000000000000000000001 /* VivaDictaMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* VivaDictaMacApp.swift */; };
+		300000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* AppModel.swift */; };
+		300000000000000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* ContentView.swift */; };
+		300000000000000000000004 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* GlobalHotKey.swift */; };
+		300000000000000000000005 /* TextInserter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* TextInserter.swift */; };
+		300000000000000000000011 /* AudioRecording in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000001 /* AudioRecording */; };
+		300000000000000000000012 /* CloudTranscription in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000002 /* CloudTranscription */; };
+		300000000000000000000013 /* Keychain in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000003 /* Keychain */; };
+		300000000000000000000014 /* LocalTranscription in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000004 /* LocalTranscription */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* VivaDictaMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VivaDictaMacApp.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* GlobalHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotKey.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* TextInserter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInserter.swift; sourceTree = "<group>"; };
+		200000000000000000000010 /* VivaDictaMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VivaDictaMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		400000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000011 /* AudioRecording in Frameworks */,
+				300000000000000000000012 /* CloudTranscription in Frameworks */,
+				300000000000000000000013 /* Keychain in Frameworks */,
+				300000000000000000000014 /* LocalTranscription in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		100000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000002 /* VivaDictaMac */,
+				100000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		100000000000000000000002 /* VivaDictaMac */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* VivaDictaMacApp.swift */,
+				200000000000000000000002 /* AppModel.swift */,
+				200000000000000000000003 /* ContentView.swift */,
+				200000000000000000000004 /* GlobalHotKey.swift */,
+				200000000000000000000005 /* TextInserter.swift */,
+			);
+			path = VivaDictaMac;
+			sourceTree = "<group>";
+		};
+		100000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000010 /* VivaDictaMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B00000000000000000000001 /* VivaDictaMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 500000000000000000000002 /* Build configuration list for PBXNativeTarget "VivaDictaMac" */;
+			buildPhases = (
+				400000000000000000000001 /* Sources */,
+				400000000000000000000002 /* Frameworks */,
+				400000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VivaDictaMac;
+			packageProductDependencies = (
+				610000000000000000000001 /* AudioRecording */,
+				610000000000000000000002 /* CloudTranscription */,
+				610000000000000000000003 /* Keychain */,
+				610000000000000000000004 /* LocalTranscription */,
+			);
+			productName = VivaDictaMac;
+			productReference = 200000000000000000000010 /* VivaDictaMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					B00000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = 500000000000000000000001 /* Build configuration list for PBXProject "VivaDictaMac" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 100000000000000000000001;
+			packageReferences = (
+				600000000000000000000001 /* XCLocalSwiftPackageReference "Modules/AudioRecording" */,
+				600000000000000000000002 /* XCLocalSwiftPackageReference "Modules/CloudTranscription" */,
+				600000000000000000000003 /* XCLocalSwiftPackageReference "Modules/Keychain" */,
+				600000000000000000000004 /* XCLocalSwiftPackageReference "Modules/LocalTranscription" */,
+			);
+			productRefGroup = 100000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B00000000000000000000001 /* VivaDictaMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		400000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		400000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000001 /* VivaDictaMacApp.swift in Sources */,
+				300000000000000000000002 /* AppModel.swift in Sources */,
+				300000000000000000000003 /* ContentView.swift in Sources */,
+				300000000000000000000004 /* GlobalHotKey.swift in Sources */,
+				300000000000000000000005 /* TextInserter.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		510000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		510000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		520000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "VivaDicta Mac";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "VivaDicta Mac 需要麥克風權限才能進行語音轉錄。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tomasew.VivaDictaMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		520000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "VivaDicta Mac";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "VivaDicta Mac 需要麥克風權限才能進行語音轉錄。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tomasew.VivaDictaMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		500000000000000000000001 /* Build configuration list for PBXProject "VivaDictaMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				510000000000000000000001 /* Debug */,
+				510000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		500000000000000000000002 /* Build configuration list for PBXNativeTarget "VivaDictaMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				520000000000000000000001 /* Debug */,
+				520000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		600000000000000000000001 /* XCLocalSwiftPackageReference "Modules/AudioRecording" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/AudioRecording;
+		};
+		600000000000000000000002 /* XCLocalSwiftPackageReference "Modules/CloudTranscription" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/CloudTranscription;
+		};
+		600000000000000000000003 /* XCLocalSwiftPackageReference "Modules/Keychain" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/Keychain;
+		};
+		600000000000000000000004 /* XCLocalSwiftPackageReference "Modules/LocalTranscription" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/LocalTranscription;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		610000000000000000000001 /* AudioRecording */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 600000000000000000000001 /* XCLocalSwiftPackageReference "Modules/AudioRecording" */;
+			productName = AudioRecording;
+		};
+		610000000000000000000002 /* CloudTranscription */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 600000000000000000000002 /* XCLocalSwiftPackageReference "Modules/CloudTranscription" */;
+			productName = CloudTranscription;
+		};
+		610000000000000000000003 /* Keychain */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 600000000000000000000003 /* XCLocalSwiftPackageReference "Modules/Keychain" */;
+			productName = Keychain;
+		};
+		610000000000000000000004 /* LocalTranscription */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 600000000000000000000004 /* XCLocalSwiftPackageReference "Modules/LocalTranscription" */;
+			productName = LocalTranscription;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}
