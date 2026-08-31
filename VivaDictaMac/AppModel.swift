@@ -16,6 +16,18 @@ final class AppModel: ObservableObject {
 
     static let localModelName = "openai_whisper-large-v3-v20240930_turbo_632MB"
     static let groqModelName = "whisper-large-v3-turbo"
+    static let defaultRefinementModel = "openai/gpt-oss-20b"
+    static let defaultRefinementPrompt = """
+    你是語音轉文字後處理器。請只修正使用者提供的逐字稿，不要回答內容本身。
+
+    規則：
+    1. 保留原意、語氣、資訊與專有名詞，不新增不存在的事實。
+    2. 修正明顯的語音辨識錯字、同音字、斷句與標點。
+    3. 中文以自然的繁體中文書寫；英文產品名、技術名詞、縮寫與指令維持英文。
+    4. 移除沒有語意作用的口頭填充詞與不必要重複，但不要把內容大幅摘要或改寫。
+    5. 不要加入標題、說明、引號、前言或結語。
+    6. 只輸出修正後的文字。
+    """
 
     @Published var backend: Backend {
         didSet { UserDefaults.standard.set(backend.rawValue, forKey: "transcriptionBackend") }
@@ -26,12 +38,23 @@ final class AppModel: ObservableObject {
     @Published var autoInsert: Bool {
         didSet { UserDefaults.standard.set(autoInsert, forKey: "autoInsert") }
     }
+    @Published var refinementEnabled: Bool {
+        didSet { UserDefaults.standard.set(refinementEnabled, forKey: "refinementEnabled") }
+    }
+    @Published var refinementModel: String {
+        didSet { UserDefaults.standard.set(refinementModel, forKey: "refinementModel") }
+    }
+    @Published var refinementPrompt: String {
+        didSet { UserDefaults.standard.set(refinementPrompt, forKey: "refinementPrompt") }
+    }
     @Published var groqAPIKey: String
     @Published private(set) var isRecording = false
     @Published private(set) var isProcessing = false
+    @Published private(set) var isRefining = false
     @Published private(set) var isDownloadingLocalModel = false
     @Published private(set) var localModelProgress: Double = 0
     @Published private(set) var localModelStatus = ""
+    @Published var rawTranscript = ""
     @Published var transcript = ""
     @Published private(set) var statusText = "準備就緒"
     @Published private(set) var errorText: String?
@@ -50,6 +73,9 @@ final class AppModel: ObservableObject {
         backend = Backend(rawValue: defaults.string(forKey: "transcriptionBackend") ?? "") ?? .groq
         language = defaults.string(forKey: "transcriptionLanguage") ?? "auto"
         autoInsert = defaults.object(forKey: "autoInsert") as? Bool ?? true
+        refinementEnabled = defaults.object(forKey: "refinementEnabled") as? Bool ?? false
+        refinementModel = defaults.string(forKey: "refinementModel") ?? Self.defaultRefinementModel
+        refinementPrompt = defaults.string(forKey: "refinementPrompt") ?? Self.defaultRefinementPrompt
         groqAPIKey = keychain.getString(forKey: groqKeychainKey, syncable: false) ?? ""
 
         recorder.onDidFinishUnsuccessfully = { [weak self] in
@@ -88,12 +114,42 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func resetRefinementPrompt() {
+        refinementPrompt = Self.defaultRefinementPrompt
+        refinementModel = Self.defaultRefinementModel
+        statusText = "已恢復預設精練設定"
+    }
+
     func toggleRecording(captureTarget: Bool = false) {
         guard !isProcessing, !isDownloadingLocalModel else { return }
         if isRecording {
             stopAndTranscribe()
         } else {
             Task { await startRecording(captureTarget: captureTarget) }
+        }
+    }
+
+    func refineCurrentTranscript() {
+        let source = rawTranscript.isEmpty ? transcript : rawTranscript
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorText = "精練需要 Groq API Key。"
+            return
+        }
+        guard !isRefining else { return }
+
+        isRefining = true
+        statusText = "AI 精練中…"
+        errorText = nil
+        Task {
+            defer { isRefining = false }
+            do {
+                transcript = try await refineTranscript(source)
+                statusText = "精練完成"
+            } catch {
+                errorText = "精練失敗：\(error.localizedDescription)"
+                statusText = "精練失敗；保留原始文字"
+            }
         }
     }
 
@@ -108,7 +164,12 @@ final class AppModel: ObservableObject {
 
     func copyTranscript() {
         TextInserter.copy(transcript)
-        statusText = "已複製到剪貼簿"
+        statusText = "已複製最後輸出"
+    }
+
+    func copyRawTranscript() {
+        TextInserter.copy(rawTranscript)
+        statusText = "已複製原始 ASR 文字"
     }
 
     func downloadLocalModel() {
@@ -166,6 +227,12 @@ final class AppModel: ObservableObject {
         if backend == .groq && groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errorText = "請先輸入並儲存 Groq API Key。"
             statusText = "缺少 Groq API Key"
+            return
+        }
+
+        if refinementEnabled && groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errorText = "已啟用 AI 精練，請先輸入並儲存 Groq API Key。"
+            statusText = "精練缺少 Groq API Key"
             return
         }
 
@@ -255,23 +322,82 @@ final class AppModel: ObservableObject {
                     ).text
                 }
 
-                transcript = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !transcript.isEmpty else {
+                rawTranscript = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+                transcript = rawTranscript
+                guard !rawTranscript.isEmpty else {
                     statusText = "沒有辨識到文字"
                     return
                 }
 
+                if refinementEnabled {
+                    statusText = "ASR 完成，AI 精練中…"
+                    isRefining = true
+                    do {
+                        transcript = try await refineTranscript(rawTranscript)
+                    } catch {
+                        transcript = rawTranscript
+                        errorText = "精練失敗，已保留原始 ASR 文字：\(error.localizedDescription)"
+                    }
+                    isRefining = false
+                }
+
                 if autoInsert, let targetPID {
                     let inserted = await TextInserter.insert(transcript, into: targetPID, promptForAccessibility: true)
-                    statusText = inserted ? "轉錄完成並已貼入" : "轉錄完成；已複製到剪貼簿"
+                    if inserted {
+                        statusText = refinementEnabled ? "轉錄、精練完成並已貼入" : "轉錄完成並已貼入"
+                    } else {
+                        statusText = refinementEnabled ? "轉錄、精練完成；已複製到剪貼簿" : "轉錄完成；已複製到剪貼簿"
+                    }
                 } else {
-                    statusText = "轉錄完成"
+                    statusText = refinementEnabled ? "轉錄與精練完成" : "轉錄完成"
                 }
             } catch {
+                isRefining = false
                 errorText = "轉錄失敗：\(error.localizedDescription)"
                 statusText = "轉錄失敗"
             }
         }
+    }
+
+    private func refineTranscript(_ text: String) async throws -> String {
+        let key = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw RefinementError.missingAPIKey }
+
+        let model = refinementModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { throw RefinementError.missingModel }
+
+        guard let url = URL(string: "https://api.groq.com/openai/v1/chat/completions") else {
+            throw RefinementError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = RefinementRequest(
+            model: model,
+            messages: [
+                .init(role: "system", content: refinementPrompt),
+                .init(role: "user", content: text)
+            ],
+            maxCompletionTokens: 4096
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw RefinementError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let apiError = try? JSONDecoder().decode(GroqErrorEnvelope.self, from: data)
+            throw RefinementError.apiError(apiError?.error.message ?? "HTTP \(http.statusCode)")
+        }
+
+        let decoded = try JSONDecoder().decode(RefinementResponse.self, from: data)
+        guard let output = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+            throw RefinementError.emptyOutput
+        }
+        return output
     }
 
     private func microphoneAccessGranted() async -> Bool {
@@ -282,6 +408,58 @@ final class AppModel: ObservableObject {
             return await AVCaptureDevice.requestAccess(for: .audio)
         default:
             return false
+        }
+    }
+}
+
+private struct RefinementRequest: Encodable {
+    struct Message: Encodable {
+        let role: String
+        let content: String
+    }
+
+    let model: String
+    let messages: [Message]
+    let maxCompletionTokens: Int
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case maxCompletionTokens = "max_completion_tokens"
+    }
+}
+
+private struct RefinementResponse: Decodable {
+    struct Choice: Decodable {
+        struct Message: Decodable {
+            let content: String
+        }
+        let message: Message
+    }
+    let choices: [Choice]
+}
+
+private struct GroqErrorEnvelope: Decodable {
+    struct APIError: Decodable {
+        let message: String
+    }
+    let error: APIError
+}
+
+private enum RefinementError: LocalizedError {
+    case missingAPIKey
+    case missingModel
+    case invalidResponse
+    case emptyOutput
+    case apiError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey: "缺少 Groq API Key"
+        case .missingModel: "沒有設定精練模型"
+        case .invalidResponse: "Groq 回應格式無效"
+        case .emptyOutput: "精練模型沒有回傳文字"
+        case .apiError(let message): "Groq API：\(message)"
         }
     }
 }
