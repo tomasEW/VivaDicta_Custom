@@ -9,6 +9,7 @@ struct ContentView: View {
                 header
                 backendSection
                 languageSection
+                refinementSection
                 recordingSection
                 transcriptSection
                 statusSection
@@ -49,7 +50,7 @@ struct ContentView: View {
                             .textFieldStyle(.roundedBorder)
                         Button("儲存") { model.saveGroqAPIKey() }
                     }
-                    Text("預設使用 whisper-large-v3-turbo；不需要下載本地模型。")
+                    Text("ASR 預設使用 whisper-large-v3-turbo；同一把 Groq API Key 也可供 AI 精練使用。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -91,7 +92,37 @@ struct ContentView: View {
                 }
                 .frame(width: 260)
                 Spacer()
-                Toggle("轉錄後自動貼回原本 App", isOn: $model.autoInsert)
+                Toggle("完成後自動貼回原本 App", isOn: $model.autoInsert)
+            }
+            .padding(8)
+        }
+    }
+
+    private var refinementSection: some View {
+        GroupBox("AI 精練") {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("ASR 後自動精練文字", isOn: $model.refinementEnabled)
+
+                HStack {
+                    Text("Groq 模型")
+                    TextField("openai/gpt-oss-20b", text: $model.refinementModel)
+                        .textFieldStyle(.roundedBorder)
+                    Button("恢復預設") { model.resetRefinementPrompt() }
+                }
+
+                Text("精練 Prompt")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $model.refinementPrompt)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 145)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+
+                Text("精練失敗時會保留並輸出原始 ASR，不會因 AI 失敗而吃掉轉錄結果。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(8)
         }
@@ -103,7 +134,7 @@ struct ContentView: View {
                 model.toggleRecording()
             } label: {
                 Label(
-                    model.isRecording ? "停止並轉錄" : (model.isProcessing ? "轉錄中…" : "開始錄音"),
+                    model.isRecording ? "停止並轉錄" : (model.isProcessing ? "處理中…" : "開始錄音"),
                     systemImage: model.isRecording ? "stop.circle.fill" : "mic.fill"
                 )
                 .font(.headline)
@@ -114,7 +145,7 @@ struct ContentView: View {
             .controlSize(.large)
             .disabled(model.isProcessing || model.isDownloadingLocalModel)
 
-            if model.isProcessing {
+            if model.isProcessing || model.isRefining {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -122,25 +153,50 @@ struct ContentView: View {
     }
 
     private var transcriptSection: some View {
-        GroupBox("最近一次轉錄") {
-            VStack(alignment: .trailing, spacing: 8) {
-                TextEditor(text: $model.transcript)
-                    .font(.body)
-                    .frame(minHeight: 130)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        VStack(spacing: 14) {
+            GroupBox("原始 ASR") {
+                VStack(alignment: .trailing, spacing: 8) {
+                    TextEditor(text: $model.rawTranscript)
+                        .font(.body)
+                        .frame(minHeight: 105)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
 
-                HStack {
-                    Button("要求輔助使用權限") { model.requestAccessibilityPermission() }
-                    Spacer()
-                    Button("複製") { model.copyTranscript() }
-                        .disabled(model.transcript.isEmpty)
-                    Button("貼到目前 App") { model.insertTranscriptNow() }
-                        .disabled(model.transcript.isEmpty)
+                    HStack {
+                        Text("保留未精練版本，方便比較 ASR 與 AI 後處理差異。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("複製 Raw") { model.copyRawTranscript() }
+                            .disabled(model.rawTranscript.isEmpty)
+                        Button(model.isRefining ? "精練中…" : "重新精練") { model.refineCurrentTranscript() }
+                            .disabled(model.rawTranscript.isEmpty || model.isRefining)
+                    }
                 }
+                .padding(8)
             }
-            .padding(8)
+
+            GroupBox("最後輸出") {
+                VStack(alignment: .trailing, spacing: 8) {
+                    TextEditor(text: $model.transcript)
+                        .font(.body)
+                        .frame(minHeight: 130)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+
+                    HStack {
+                        Button("要求輔助使用權限") { model.requestAccessibilityPermission() }
+                        Spacer()
+                        Button("複製") { model.copyTranscript() }
+                            .disabled(model.transcript.isEmpty)
+                        Button("貼到目前 App") { model.insertTranscriptNow() }
+                            .disabled(model.transcript.isEmpty)
+                    }
+                }
+                .padding(8)
+            }
         }
     }
 
@@ -201,12 +257,20 @@ struct SettingsView: View {
                 Text("English").tag("en")
             }
 
-            Toggle("全域快捷鍵轉錄後自動貼回", isOn: $model.autoInsert)
+            Toggle("全域快捷鍵完成後自動貼回", isOn: $model.autoInsert)
+            Toggle("ASR 後使用 Groq AI 精練", isOn: $model.refinementEnabled)
 
-            if model.backend == .groq {
+            if model.backend == .groq || model.refinementEnabled {
                 SecureField("Groq API Key", text: $model.groqAPIKey)
                 Button("儲存 Groq API Key") { model.saveGroqAPIKey() }
-            } else {
+            }
+
+            if model.refinementEnabled {
+                TextField("精練模型", text: $model.refinementModel)
+                Button("恢復預設精練設定") { model.resetRefinementPrompt() }
+            }
+
+            if model.backend == .local {
                 LabeledContent("本地模型", value: model.isLocalModelReady ? "已就緒" : "尚未下載")
                 if !model.isLocalModelReady {
                     Button("下載 Whisper Large V3 Turbo 632MB") { model.downloadLocalModel() }
