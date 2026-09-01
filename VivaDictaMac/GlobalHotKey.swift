@@ -44,13 +44,13 @@ final class GlobalHotKey: @unchecked Sendable {
             { _, event, userData in
                 guard let event, let userData else { return noErr }
 
-                var pressedID = EventHotKeyID()
+                var pressedID = EventHotKeyID(signature: 0, id: 0)
                 let readStatus = GetEventParameter(
                     event,
                     EventParamName(kEventParamDirectObject),
                     EventParamType(typeEventHotKeyID),
                     nil,
-                    UInt32(MemoryLayout<EventHotKeyID>.size),
+                    MemoryLayout<EventHotKeyID>.size,
                     nil,
                     &pressedID
                 )
@@ -58,9 +58,10 @@ final class GlobalHotKey: @unchecked Sendable {
                     return noErr
                 }
 
+                let hotKeyID = pressedID.id
                 let instance = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
                 Task { @MainActor in
-                    switch pressedID.id {
+                    switch hotKeyID {
                     case HotKeyID.dictation.rawValue:
                         instance.dictationCallback?()
                     case HotKeyID.speakToEdit.rawValue:
