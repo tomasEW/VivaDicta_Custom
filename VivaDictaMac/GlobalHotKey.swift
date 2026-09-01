@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import Foundation
 
@@ -16,6 +17,7 @@ final class GlobalHotKey: @unchecked Sendable {
     private var dictationHotKeyRef: EventHotKeyRef?
     private var speakToEditHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
+    private var applicationDidFinishLaunchingObserver: NSObjectProtocol?
     private var dictationCallback: (@MainActor () -> Void)?
     private var speakToEditCallback: (@MainActor () -> Void)?
 
@@ -32,6 +34,30 @@ final class GlobalHotKey: @unchecked Sendable {
     ) {
         self.dictationCallback = dictationCallback
         self.speakToEditCallback = speakToEditCallback
+
+        applicationDidFinishLaunchingObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishLaunchingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.registerHotKeys()
+        }
+
+        // SwiftUI constructs AppModel before NSApplication has necessarily finished
+        // launching. Carbon returns eventInternalErr if hot keys are registered that
+        // early, so defer registration until the application event target is ready.
+        if NSApplication.shared.isRunning {
+            registerHotKeys()
+        }
+    }
+
+    private func registerHotKeys() {
+        if let applicationDidFinishLaunchingObserver {
+            NotificationCenter.default.removeObserver(applicationDidFinishLaunchingObserver)
+            self.applicationDidFinishLaunchingObserver = nil
+        }
+
+        guard eventHandlerRef == nil else { return }
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -80,7 +106,7 @@ final class GlobalHotKey: @unchecked Sendable {
 
         guard handlerStatus == noErr else { return }
 
-        var dictationID = EventHotKeyID(signature: Self.signature, id: HotKeyID.dictation.rawValue)
+        let dictationID = EventHotKeyID(signature: Self.signature, id: HotKeyID.dictation.rawValue)
         dictationIsRegistered = RegisterEventHotKey(
             UInt32(kVK_Space),
             UInt32(controlKey | optionKey),
@@ -90,7 +116,7 @@ final class GlobalHotKey: @unchecked Sendable {
             &dictationHotKeyRef
         ) == noErr
 
-        var speakToEditID = EventHotKeyID(signature: Self.signature, id: HotKeyID.speakToEdit.rawValue)
+        let speakToEditID = EventHotKeyID(signature: Self.signature, id: HotKeyID.speakToEdit.rawValue)
         speakToEditIsRegistered = RegisterEventHotKey(
             UInt32(kVK_ANSI_E),
             UInt32(controlKey | optionKey),
@@ -102,6 +128,9 @@ final class GlobalHotKey: @unchecked Sendable {
     }
 
     deinit {
+        if let applicationDidFinishLaunchingObserver {
+            NotificationCenter.default.removeObserver(applicationDidFinishLaunchingObserver)
+        }
         if let dictationHotKeyRef {
             UnregisterEventHotKey(dictationHotKeyRef)
         }
