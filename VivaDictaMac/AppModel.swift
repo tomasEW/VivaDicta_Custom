@@ -14,6 +14,13 @@ final class AppModel: ObservableObject {
         var id: String { rawValue }
     }
 
+    enum APIKeyStorageState: Equatable {
+        case missing
+        case unsaved
+        case saved
+        case failed
+    }
+
     private enum RecordingWorkflow {
         case dictation
         case speakToEdit(TextSelectionContext)
@@ -65,7 +72,19 @@ final class AppModel: ObservableObject {
     @Published var refinementPrompt: String {
         didSet { UserDefaults.standard.set(refinementPrompt, forKey: "refinementPrompt") }
     }
-    @Published var groqAPIKey: String
+    @Published var groqAPIKey: String {
+        didSet {
+            let trimmed = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                groqAPIKeyStorageState = .missing
+            } else if trimmed == savedGroqAPIKey {
+                groqAPIKeyStorageState = .saved
+            } else {
+                groqAPIKeyStorageState = .unsaved
+            }
+        }
+    }
+    @Published private(set) var groqAPIKeyStorageState: APIKeyStorageState = .missing
     @Published private(set) var isRecording = false
     @Published private(set) var isProcessing = false
     @Published private(set) var isRefining = false
@@ -88,6 +107,7 @@ final class AppModel: ObservableObject {
     private var recordingURL: URL?
     private var targetPID: pid_t?
     private var recordingWorkflow: RecordingWorkflow = .dictation
+    private var savedGroqAPIKey = ""
 
     private let groqKeychainKey = "groq_api_key"
 
@@ -99,7 +119,10 @@ final class AppModel: ObservableObject {
         refinementEnabled = defaults.object(forKey: "refinementEnabled") as? Bool ?? false
         refinementModel = defaults.string(forKey: "refinementModel") ?? Self.defaultRefinementModel
         refinementPrompt = defaults.string(forKey: "refinementPrompt") ?? Self.defaultRefinementPrompt
-        groqAPIKey = keychain.getString(forKey: groqKeychainKey, syncable: false) ?? ""
+        let storedGroqAPIKey = keychain.getString(forKey: groqKeychainKey, syncable: false) ?? ""
+        groqAPIKey = storedGroqAPIKey
+        savedGroqAPIKey = storedGroqAPIKey
+        groqAPIKeyStorageState = storedGroqAPIKey.isEmpty ? .missing : .saved
 
         recorder.onDidFinishUnsuccessfully = { [weak self] in
             self?.isRecording = false
@@ -140,14 +163,24 @@ final class AppModel: ObservableObject {
         let trimmed = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         groqAPIKey = trimmed
         guard !trimmed.isEmpty else {
-            _ = keychain.delete(forKey: groqKeychainKey, syncable: false)
-            statusText = "已清除 Groq API Key"
+            if keychain.delete(forKey: groqKeychainKey, syncable: false) {
+                savedGroqAPIKey = ""
+                groqAPIKeyStorageState = .missing
+                statusText = "已清除 Groq API Key"
+                errorText = nil
+            } else {
+                groqAPIKeyStorageState = .failed
+                errorText = "無法從 macOS Keychain 清除 Groq API Key。"
+            }
             return
         }
         if keychain.save(trimmed, forKey: groqKeychainKey, syncable: false) {
+            savedGroqAPIKey = trimmed
+            groqAPIKeyStorageState = .saved
             statusText = "Groq API Key 已安全儲存"
             errorText = nil
         } else {
+            groqAPIKeyStorageState = .failed
             errorText = "無法將 Groq API Key 寫入 macOS Keychain。"
         }
     }
@@ -178,12 +211,14 @@ final class AppModel: ObservableObject {
         guard !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorText = "Speak to Edit 需要 Groq API Key 來執行 AI 改寫。"
             statusText = "Speak to Edit 缺少 Groq API Key"
+            revealMainWindowForHotKeyError()
             return
         }
 
         guard let selection = TextInserter.captureSelection(promptForAccessibility: true) else {
             errorText = "沒有讀到選取文字。請先在其他 App 明確選取一段可編輯文字，再按 ⌃⌥E。"
             statusText = "Speak to Edit：沒有選取文字"
+            revealMainWindowForHotKeyError()
             return
         }
 
@@ -292,12 +327,14 @@ final class AppModel: ObservableObject {
         guard await microphoneAccessGranted() else {
             errorText = "需要麥克風權限。請到「系統設定 → 隱私權與安全性 → 麥克風」允許 VivaDicta Mac。"
             statusText = "沒有麥克風權限"
+            if captureTarget { revealMainWindowForHotKeyError() }
             return
         }
 
         if backend == .groq && groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errorText = "請先輸入並儲存 Groq API Key。"
             statusText = "缺少 Groq API Key"
+            if captureTarget { revealMainWindowForHotKeyError() }
             return
         }
 
@@ -314,12 +351,14 @@ final class AppModel: ObservableObject {
                 ? "Speak to Edit 需要 Groq API Key。"
                 : "已啟用 AI 精練，請先輸入並儲存 Groq API Key。"
             statusText = speakToEditRequested ? "Speak to Edit 缺少 Groq API Key" : "精練缺少 Groq API Key"
+            if captureTarget || speakToEditRequested { revealMainWindowForHotKeyError() }
             return
         }
 
         if backend == .local && !isLocalModelReady {
             errorText = "本地模型尚未下載。請先按「下載本地模型」。"
             statusText = "本地模型尚未下載"
+            if captureTarget { revealMainWindowForHotKeyError() }
             return
         }
 
@@ -573,6 +612,14 @@ final class AppModel: ObservableObject {
             throw RefinementError.emptyOutput
         }
         return output
+    }
+
+    private func revealMainWindowForHotKeyError() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let window = NSApplication.shared.windows.first { $0.title == "VivaDicta Mac" }
+            ?? NSApplication.shared.windows.first { $0.canBecomeMain }
+        window?.deminiaturize(nil)
+        window?.makeKeyAndOrderFront(nil)
     }
 
     private func microphoneAccessGranted() async -> Bool {

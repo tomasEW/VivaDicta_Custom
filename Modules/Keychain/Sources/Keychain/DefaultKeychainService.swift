@@ -74,9 +74,15 @@ public final class DefaultKeychainService: KeychainService, Sendable {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrAccount as String: key
         ]
+#if !os(macOS)
+        // The Data Protection Keychain requires a signed application identifier on
+        // macOS. VivaDictaMac CI artifacts are ad-hoc signed, so forcing this keychain
+        // returns errSecMissingEntitlement and makes every API-key save fail. The
+        // regular macOS login keychain remains encrypted and available across builds.
+        query[kSecUseDataProtectionKeychain as String] = true
+#endif
         if syncable {
             query[kSecAttrSynchronizable as String] = kCFBooleanTrue
         }

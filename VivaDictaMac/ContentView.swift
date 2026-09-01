@@ -1,5 +1,14 @@
 import SwiftUI
 
+private enum AppBuildInfo {
+    static var displayText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let commit = Bundle.main.object(forInfoDictionaryKey: "VivaGitCommit") as? String ?? "local"
+        return "版本 \(version)（Build \(build)）· \(commit)"
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
 
@@ -30,6 +39,9 @@ struct ContentView: View {
                 Text("⌃⌥Space：一般語音輸入　｜　⌃⌥E：Speak to Edit 選取文字")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Text(AppBuildInfo.displayText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
         }
@@ -45,16 +57,7 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
 
-                if model.backend == .groq {
-                    HStack {
-                        SecureField("Groq API Key（gsk_…）", text: $model.groqAPIKey)
-                            .textFieldStyle(.roundedBorder)
-                        Button("儲存") { model.saveGroqAPIKey() }
-                    }
-                    Text("ASR 預設使用 whisper-large-v3-turbo；同一把 Groq API Key 也供 AI 精練與 Speak to Edit 使用。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
+                if model.backend == .local {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Image(systemName: model.isLocalModelReady ? "checkmark.circle.fill" : "arrow.down.circle")
@@ -78,6 +81,12 @@ struct ContentView: View {
                         }
                     }
                 }
+
+                GroqAPIKeyControls()
+
+                Text("Groq ASR、AI 精練與 Speak to Edit 共用這把 API Key；本地 ASR 不需要它。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(8)
         }
@@ -327,14 +336,7 @@ struct SettingsView: View {
             Toggle("全域快捷鍵完成後自動貼回", isOn: $model.autoInsert)
             Toggle("ASR 後使用 Groq AI 精練", isOn: $model.refinementEnabled)
 
-            if model.backend == .groq || model.refinementEnabled {
-                SecureField("Groq API Key", text: $model.groqAPIKey)
-                Button("儲存 Groq API Key") { model.saveGroqAPIKey() }
-            } else {
-                Text("Speak to Edit 仍需要 Groq API Key；可在主視窗的轉錄方式區輸入。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            GroqAPIKeyControls()
 
             if model.refinementEnabled {
                 TextField("精練 / Speak to Edit 模型", text: $model.refinementModel)
@@ -351,8 +353,55 @@ struct SettingsView: View {
 
             LabeledContent("一般語音", value: "⌃⌥Space")
             LabeledContent("Speak to Edit", value: "⌃⌥E")
+            LabeledContent("版本", value: AppBuildInfo.displayText)
             Button("要求輔助使用權限") { model.requestAccessibilityPermission() }
         }
         .padding(24)
+    }
+}
+
+struct GroqAPIKeyControls: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                SecureField("Groq API Key（gsk_…）", text: $model.groqAPIKey)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    model.saveGroqAPIKey()
+                } label: {
+                    Label(
+                        model.groqAPIKeyStorageState == .saved
+                            ? "已儲存"
+                            : model.groqAPIKeyStorageState == .failed ? "重試儲存" : "儲存",
+                        systemImage: model.groqAPIKeyStorageState == .saved
+                            ? "checkmark.circle.fill"
+                            : "square.and.arrow.down"
+                    )
+                }
+                .disabled(
+                    model.groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.groqAPIKeyStorageState == .saved
+                )
+            }
+
+            switch model.groqAPIKeyStorageState {
+            case .missing:
+                Label("尚未儲存 API Key；Groq 與 Speak to Edit 目前無法使用。", systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+            case .unsaved:
+                Label("有尚未儲存的變更。", systemImage: "pencil.circle.fill")
+                    .foregroundStyle(.orange)
+            case .saved:
+                Label("API Key 已儲存在 macOS Keychain。", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .failed:
+                Label("儲存失敗；請按「重試儲存」。", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+            }
+        }
+        .font(.caption)
     }
 }
