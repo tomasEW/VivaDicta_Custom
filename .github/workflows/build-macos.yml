@@ -43,13 +43,13 @@ jobs:
             -derivedDataPath "$PWD/build" \
             CODE_SIGNING_ALLOWED=NO \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
-            INFOPLIST_KEY_VivaGitCommit="${GITHUB_SHA:0:7}" \
             build | tee xcodebuild.log
 
       - name: Ad-hoc sign app
         run: |
           APP_PATH="$PWD/build/Build/Products/Release/VivaDictaMac.app"
           test -d "$APP_PATH"
+          /usr/libexec/PlistBuddy -c "Add :VivaGitCommit string ${GITHUB_SHA:0:7}" "$APP_PATH/Contents/Info.plist"
           codesign --force --deep --sign - "$APP_PATH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
