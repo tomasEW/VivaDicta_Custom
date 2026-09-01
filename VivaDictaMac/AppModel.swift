@@ -14,6 +14,11 @@ final class AppModel: ObservableObject {
         var id: String { rawValue }
     }
 
+    private enum RecordingWorkflow {
+        case dictation
+        case speakToEdit(TextSelectionContext)
+    }
+
     static let localModelName = "openai_whisper-large-v3-v20240930_turbo_632MB"
     static let groqModelName = "whisper-large-v3-turbo"
     static let defaultRefinementModel = "openai/gpt-oss-20b"
@@ -27,6 +32,19 @@ final class AppModel: ObservableObject {
     4. 移除沒有語意作用的口頭填充詞與不必要重複，但不要把內容大幅摘要或改寫。
     5. 不要加入標題、說明、引號、前言或結語。
     6. 只輸出修正後的文字。
+    """
+
+    static let speakToEditSystemPrompt = """
+    你是文字編輯器，不是聊天機器人。使用者會提供一段「目前選取的原文」以及一段由語音辨識得到的「修改指令」。
+
+    你的工作只有一件事：依照修改指令改寫原文，並輸出修改完成後的完整文字。
+
+    規則：
+    1. 修改指令是操作命令，不是要你回答的問題。即使指令看起來像問題，也不要回答它。
+    2. 除非指令要求，否則保留原文的事實、語意、專有名詞、數字與重要細節。
+    3. 可以依指令做正式化、口語化、縮短、擴寫、翻譯、重組、修正文法或改變語氣。
+    4. 不要加入說明、前言、標題、引號、註解或「修改後如下」之類的文字。
+    5. 只輸出改寫後的完整文字，讓它可以直接取代目前選取的原文。
     """
 
     @Published var backend: Backend {
@@ -51,11 +69,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var isProcessing = false
     @Published private(set) var isRefining = false
+    @Published private(set) var isSpeakToEditActive = false
     @Published private(set) var isDownloadingLocalModel = false
     @Published private(set) var localModelProgress: Double = 0
     @Published private(set) var localModelStatus = ""
     @Published var rawTranscript = ""
     @Published var transcript = ""
+    @Published private(set) var speakToEditSourceText = ""
+    @Published private(set) var speakToEditInstruction = ""
+    @Published private(set) var speakToEditResult = ""
     @Published private(set) var statusText = "準備就緒"
     @Published private(set) var errorText: String?
 
@@ -65,6 +87,7 @@ final class AppModel: ObservableObject {
     private var hotKey: GlobalHotKey?
     private var recordingURL: URL?
     private var targetPID: pid_t?
+    private var recordingWorkflow: RecordingWorkflow = .dictation
 
     private let groqKeychainKey = "groq_api_key"
 
@@ -80,14 +103,21 @@ final class AppModel: ObservableObject {
 
         recorder.onDidFinishUnsuccessfully = { [weak self] in
             self?.isRecording = false
+            self?.isSpeakToEditActive = false
+            self?.recordingWorkflow = .dictation
             self?.recordingURL = nil
             self?.statusText = "錄音失敗"
             self?.errorText = "系統回報錄音未成功完成。"
         }
 
-        hotKey = GlobalHotKey { [weak self] in
-            self?.toggleRecording(captureTarget: true)
-        }
+        hotKey = GlobalHotKey(
+            dictationCallback: { [weak self] in
+                self?.toggleRecording(captureTarget: true)
+            },
+            speakToEditCallback: { [weak self] in
+                self?.toggleSpeakToEdit()
+            }
+        )
     }
 
     var isLocalModelReady: Bool {
@@ -96,6 +126,14 @@ final class AppModel: ObservableObject {
 
     var hotKeyIsRegistered: Bool {
         hotKey?.isRegistered ?? false
+    }
+
+    var dictationHotKeyIsRegistered: Bool {
+        hotKey?.dictationIsRegistered ?? false
+    }
+
+    var speakToEditHotKeyIsRegistered: Bool {
+        hotKey?.speakToEditIsRegistered ?? false
     }
 
     func saveGroqAPIKey() {
@@ -125,7 +163,37 @@ final class AppModel: ObservableObject {
         if isRecording {
             stopAndTranscribe()
         } else {
-            Task { await startRecording(captureTarget: captureTarget) }
+            Task { await startRecording(captureTarget: captureTarget, workflow: .dictation) }
+        }
+    }
+
+    func toggleSpeakToEdit() {
+        guard !isProcessing, !isDownloadingLocalModel else { return }
+
+        if isRecording {
+            stopAndTranscribe()
+            return
+        }
+
+        guard !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorText = "Speak to Edit 需要 Groq API Key 來執行 AI 改寫。"
+            statusText = "Speak to Edit 缺少 Groq API Key"
+            return
+        }
+
+        guard let selection = TextInserter.captureSelection(promptForAccessibility: true) else {
+            errorText = "沒有讀到選取文字。請先在其他 App 明確選取一段可編輯文字，再按 ⌃⌥E。"
+            statusText = "Speak to Edit：沒有選取文字"
+            return
+        }
+
+        speakToEditSourceText = selection.selectedText
+        speakToEditInstruction = ""
+        speakToEditResult = ""
+        errorText = nil
+
+        Task {
+            await startRecording(captureTarget: false, workflow: .speakToEdit(selection))
         }
     }
 
@@ -216,7 +284,10 @@ final class AppModel: ObservableObject {
         _ = TextInserter.isAccessibilityTrusted(prompt: true)
     }
 
-    private func startRecording(captureTarget: Bool) async {
+    private func startRecording(
+        captureTarget: Bool,
+        workflow: RecordingWorkflow
+    ) async {
         errorText = nil
         guard await microphoneAccessGranted() else {
             errorText = "需要麥克風權限。請到「系統設定 → 隱私權與安全性 → 麥克風」允許 VivaDicta Mac。"
@@ -230,9 +301,19 @@ final class AppModel: ObservableObject {
             return
         }
 
-        if refinementEnabled && groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errorText = "已啟用 AI 精練，請先輸入並儲存 Groq API Key。"
-            statusText = "精練缺少 Groq API Key"
+        let speakToEditRequested: Bool
+        switch workflow {
+        case .dictation:
+            speakToEditRequested = false
+        case .speakToEdit:
+            speakToEditRequested = true
+        }
+
+        if (refinementEnabled || speakToEditRequested) && groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errorText = speakToEditRequested
+                ? "Speak to Edit 需要 Groq API Key。"
+                : "已啟用 AI 精練，請先輸入並儲存 Groq API Key。"
+            statusText = speakToEditRequested ? "Speak to Edit 缺少 Groq API Key" : "精練缺少 Groq API Key"
             return
         }
 
@@ -242,15 +323,23 @@ final class AppModel: ObservableObject {
             return
         }
 
-        if captureTarget {
-            let frontmost = NSWorkspace.shared.frontmostApplication
-            if frontmost?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                targetPID = frontmost?.processIdentifier
+        recordingWorkflow = workflow
+        isSpeakToEditActive = speakToEditRequested
+
+        switch workflow {
+        case .speakToEdit(let context):
+            targetPID = context.targetPID
+        case .dictation:
+            if captureTarget {
+                let frontmost = NSWorkspace.shared.frontmostApplication
+                if frontmost?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                    targetPID = frontmost?.processIdentifier
+                } else {
+                    targetPID = nil
+                }
             } else {
                 targetPID = nil
             }
-        } else {
-            targetPID = nil
         }
 
         let url = FileManager.default.temporaryDirectory
@@ -268,8 +357,12 @@ final class AppModel: ObservableObject {
             try recorder.startRecording(to: url, settings: settings)
             recordingURL = url
             isRecording = true
-            statusText = "錄音中… 再按 ⌃⌥Space 停止"
+            statusText = speakToEditRequested
+                ? "Speak to Edit 錄音中… 再按 ⌃⌥E 停止"
+                : "錄音中… 再按 ⌃⌥Space 停止"
         } catch {
+            recordingWorkflow = .dictation
+            isSpeakToEditActive = false
             recordingURL = nil
             errorText = "無法開始錄音：\(error.localizedDescription)"
             statusText = "錄音啟動失敗"
@@ -279,14 +372,25 @@ final class AppModel: ObservableObject {
     private func stopAndTranscribe() {
         guard let audioURL = recorder.stopRecording() ?? recordingURL else {
             isRecording = false
+            isSpeakToEditActive = false
+            recordingWorkflow = .dictation
             statusText = "沒有可轉錄的錄音"
             return
         }
 
+        let workflow = recordingWorkflow
+        recordingWorkflow = .dictation
         isRecording = false
+        isSpeakToEditActive = false
         recordingURL = nil
         isProcessing = true
-        statusText = backend == .groq ? "Groq 轉錄中…" : "本地轉錄中…"
+
+        switch workflow {
+        case .dictation:
+            statusText = backend == .groq ? "Groq 轉錄中…" : "本地轉錄中…"
+        case .speakToEdit:
+            statusText = "辨識 Speak to Edit 指令中…"
+        }
         errorText = nil
 
         Task {
@@ -325,7 +429,48 @@ final class AppModel: ObservableObject {
                 rawTranscript = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
                 transcript = rawTranscript
                 guard !rawTranscript.isEmpty else {
-                    statusText = "沒有辨識到文字"
+                    switch workflow {
+                    case .dictation:
+                        statusText = "沒有辨識到文字"
+                    case .speakToEdit:
+                        statusText = "沒有辨識到編輯指令"
+                    }
+                    return
+                }
+
+                if case .speakToEdit(let context) = workflow {
+                    speakToEditInstruction = rawTranscript
+                    statusText = "指令已辨識，AI 改寫選取文字中…"
+                    isRefining = true
+
+                    do {
+                        let editedText = try await applyVoiceInstruction(
+                            instruction: rawTranscript,
+                            to: context.selectedText
+                        )
+                        transcript = editedText
+                        speakToEditResult = editedText
+                        isRefining = false
+
+                        let replaced = await TextInserter.replaceSelection(
+                            with: editedText,
+                            context: context,
+                            promptForAccessibility: true
+                        )
+
+                        if replaced {
+                            statusText = "Speak to Edit 完成，已取代原本選取文字"
+                        } else {
+                            statusText = "改寫完成，但選取位置已改變；結果已複製到剪貼簿"
+                            errorText = "為避免改到錯誤位置，VivaDicta 沒有自動貼入。請確認原選取文字仍在原位置後手動貼上。"
+                        }
+                    } catch {
+                        isRefining = false
+                        transcript = context.selectedText
+                        speakToEditResult = ""
+                        errorText = "Speak to Edit 失敗：\(error.localizedDescription)"
+                        statusText = "Speak to Edit 失敗；原文未變更"
+                    }
                     return
                 }
 
@@ -360,6 +505,36 @@ final class AppModel: ObservableObject {
     }
 
     private func refineTranscript(_ text: String) async throws -> String {
+        try await performGroqTextTask(
+            systemPrompt: refinementPrompt,
+            userMessage: text
+        )
+    }
+
+    private func applyVoiceInstruction(
+        instruction: String,
+        to targetText: String
+    ) async throws -> String {
+        let message = """
+        <CURRENTLY_SELECTED_TEXT>
+        \(targetText)
+        </CURRENTLY_SELECTED_TEXT>
+
+        <SPOKEN_EDIT_INSTRUCTION>
+        \(instruction)
+        </SPOKEN_EDIT_INSTRUCTION>
+        """
+
+        return try await performGroqTextTask(
+            systemPrompt: Self.speakToEditSystemPrompt,
+            userMessage: message
+        )
+    }
+
+    private func performGroqTextTask(
+        systemPrompt: String,
+        userMessage: String
+    ) async throws -> String {
         let key = groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw RefinementError.missingAPIKey }
 
@@ -379,8 +554,8 @@ final class AppModel: ObservableObject {
         let body = RefinementRequest(
             model: model,
             messages: [
-                .init(role: "system", content: refinementPrompt),
-                .init(role: "user", content: text)
+                .init(role: "system", content: systemPrompt),
+                .init(role: "user", content: userMessage)
             ],
             maxCompletionTokens: 4096
         )
@@ -456,9 +631,9 @@ private enum RefinementError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey: "缺少 Groq API Key"
-        case .missingModel: "沒有設定精練模型"
+        case .missingModel: "沒有設定 AI 模型"
         case .invalidResponse: "Groq 回應格式無效"
-        case .emptyOutput: "精練模型沒有回傳文字"
+        case .emptyOutput: "AI 模型沒有回傳文字"
         case .apiError(let message): "Groq API：\(message)"
         }
     }
