@@ -206,11 +206,14 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(model.isProcessing || model.isDownloadingLocalModel)
+            .disabled(model.isProcessing || model.isRefining || model.isDownloadingLocalModel)
 
             if model.isProcessing || model.isRefining {
-                ProgressView()
-                    .controlSize(.small)
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                    Button("取消處理") { model.cancelActiveProcessing() }
+                }
             }
         }
     }
@@ -286,15 +289,27 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
             if !model.dictationHotKeyIsRegistered {
-                Text("一般語音快捷鍵 ⌃⌥Space 註冊失敗；仍可用視窗中的錄音按鈕。")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                hotKeyRegistrationWarning(
+                    "一般語音快捷鍵 ⌃⌥Space 註冊失敗",
+                    code: model.dictationHotKeyRegistrationErrorCode
+                )
             }
             if !model.speakToEditHotKeyIsRegistered {
-                Text("Speak to Edit 快捷鍵 ⌃⌥E 註冊失敗。")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                hotKeyRegistrationWarning(
+                    "Speak to Edit 快捷鍵 ⌃⌥E 註冊失敗",
+                    code: model.speakToEditHotKeyRegistrationErrorCode
+                )
             }
+        }
+    }
+
+    private func hotKeyRegistrationWarning(_ title: String, code: Int32?) -> some View {
+        HStack {
+            Text(code.map { "\(title)（Carbon \($0)）" } ?? title)
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Button("重新註冊") { model.retryGlobalHotKeys() }
+                .font(.caption)
         }
     }
 }
@@ -306,7 +321,11 @@ struct MenuBarContentView: View {
         Button(model.isRecording ? "停止並處理" : "開始一般錄音") {
             model.toggleRecording()
         }
-        .disabled(model.isProcessing || model.isDownloadingLocalModel)
+        .disabled(model.isProcessing || model.isRefining || model.isDownloadingLocalModel)
+
+        if model.isProcessing || model.isRefining {
+            Button("取消處理") { model.cancelActiveProcessing() }
+        }
 
         Text("Speak to Edit：在其他 App 選字後按 ⌃⌥E")
         Text(model.statusText)
@@ -353,6 +372,7 @@ struct SettingsView: View {
 
             LabeledContent("一般語音", value: "⌃⌥Space")
             LabeledContent("Speak to Edit", value: "⌃⌥E")
+            Button("重新註冊全域快捷鍵") { model.retryGlobalHotKeys() }
             LabeledContent("版本", value: AppBuildInfo.displayText)
             Button("要求輔助使用權限") { model.requestAccessibilityPermission() }
         }

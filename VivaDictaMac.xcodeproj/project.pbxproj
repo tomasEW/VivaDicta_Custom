@@ -16,6 +16,7 @@
 		300000000000000000000012 /* CloudTranscription in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000002 /* CloudTranscription */; };
 		300000000000000000000013 /* Keychain in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000003 /* Keychain */; };
 		300000000000000000000014 /* LocalTranscription in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000004 /* LocalTranscription */; };
+		300000000000000000000015 /* ChineseTextConversion in Frameworks */ = {isa = PBXBuildFile; productRef = 610000000000000000000005 /* ChineseTextConversion */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 				300000000000000000000012 /* CloudTranscription in Frameworks */,
 				300000000000000000000013 /* Keychain in Frameworks */,
 				300000000000000000000014 /* LocalTranscription in Frameworks */,
+				300000000000000000000015 /* ChineseTextConversion in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -91,6 +93,7 @@
 				610000000000000000000002 /* CloudTranscription */,
 				610000000000000000000003 /* Keychain */,
 				610000000000000000000004 /* LocalTranscription */,
+				610000000000000000000005 /* ChineseTextConversion */,
 			);
 			productName = VivaDictaMac;
 			productReference = 200000000000000000000010 /* VivaDictaMac.app */;
@@ -125,6 +128,7 @@
 				600000000000000000000002 /* XCLocalSwiftPackageReference "Modules/CloudTranscription" */,
 				600000000000000000000003 /* XCLocalSwiftPackageReference "Modules/Keychain" */,
 				600000000000000000000004 /* XCLocalSwiftPackageReference "Modules/LocalTranscription" */,
+				600000000000000000000005 /* XCLocalSwiftPackageReference "Modules/ChineseTextConversion" */,
 			);
 			productRefGroup = 100000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -288,6 +292,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Modules/LocalTranscription;
 		};
+		600000000000000000000005 /* XCLocalSwiftPackageReference "Modules/ChineseTextConversion" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/ChineseTextConversion;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -310,6 +318,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 600000000000000000000004 /* XCLocalSwiftPackageReference "Modules/LocalTranscription" */;
 			productName = LocalTranscription;
+		};
+		610000000000000000000005 /* ChineseTextConversion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 600000000000000000000005 /* XCLocalSwiftPackageReference "Modules/ChineseTextConversion" */;
+			productName = ChineseTextConversion;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

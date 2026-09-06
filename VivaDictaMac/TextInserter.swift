@@ -4,6 +4,8 @@ import ApplicationServices
 struct TextSelectionContext: Sendable, Equatable {
     let targetPID: pid_t
     let selectedText: String
+    let selectionLocation: Int?
+    let selectionLength: Int?
 }
 
 @MainActor
@@ -19,67 +21,71 @@ enum TextInserter {
         return AXIsProcessTrustedWithOptions(options)
     }
 
+    /// Deliberately copies text for an explicit user action such as the Copy
+    /// button. Automatic insertion uses a temporary pasteboard write instead.
     static func copy(_ text: String) {
         guard !text.isEmpty else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        write(text, to: .general)
     }
 
     /// Captures the text explicitly selected in whichever app currently owns
     /// keyboard focus. Speak to Edit intentionally requires an explicit
     /// selection so a failed focus restore can never rewrite unrelated text.
     static func captureSelection(promptForAccessibility: Bool) -> TextSelectionContext? {
-        guard isAccessibilityTrusted(prompt: promptForAccessibility) else {
-            return nil
-        }
-
-        guard let element = systemFocusedElement() else {
-            return nil
-        }
-
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success,
-              pid > 0,
-              pid != ProcessInfo.processInfo.processIdentifier
+        guard isAccessibilityTrusted(prompt: promptForAccessibility),
+              let frontmost = NSWorkspace.shared.frontmostApplication,
+              frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier
         else {
             return nil
         }
 
-        guard let selectedText = stringAttribute("AXSelectedText", from: element),
+        let targetPID = frontmost.processIdentifier
+        guard let element = focusedElement(for: targetPID) ?? systemFocusedElement() else {
+            return nil
+        }
+
+        var focusedPID: pid_t = 0
+        guard AXUIElementGetPid(element, &focusedPID) == .success,
+              focusedPID == targetPID,
+              let selectedText = stringAttribute("AXSelectedText", from: element),
               !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return nil
         }
 
-        return TextSelectionContext(targetPID: pid, selectedText: selectedText)
+        let range = selectedTextRange(from: element)
+        return TextSelectionContext(
+            targetPID: targetPID,
+            selectedText: selectedText,
+            selectionLocation: range?.location,
+            selectionLength: range?.length
+        )
     }
 
     /// Replaces the selection captured when Speak to Edit started.
     ///
-    /// The direct Accessibility write is preferred. If the host exposes the
-    /// selected text but does not allow setting AXSelectedText, Cmd+V is used as
-    /// a fallback. Before either path, the current selection must still match
-    /// the captured source text; otherwise the generated result is left on the
-    /// clipboard rather than risking replacement at the wrong caret position.
+    /// The direct Accessibility write is preferred and does not modify the
+    /// clipboard. Cmd+V is a fallback for hosts that expose selected text but
+    /// reject an AXSelectedText write. If selection validation fails, the
+    /// generated result is intentionally left on the clipboard for recovery.
     static func replaceSelection(
         with text: String,
         context: TextSelectionContext,
         promptForAccessibility: Bool
     ) async -> Bool {
         guard !text.isEmpty else { return false }
-        copy(text)
 
         guard isAccessibilityTrusted(prompt: promptForAccessibility) else {
+            copy(text)
             return false
         }
 
         await activateApplication(pid: context.targetPID)
 
         guard let element = focusedElement(for: context.targetPID),
-              let currentSelection = stringAttribute("AXSelectedText", from: element),
-              currentSelection == context.selectedText
+              selectionStillMatches(context, in: element)
         else {
+            copy(text)
             return false
         }
 
@@ -92,29 +98,64 @@ enum TextInserter {
             return true
         }
 
-        return postPasteShortcut()
+        return await pasteTemporarily(text)
     }
 
-    /// Copies text first, then synthesizes Cmd+V into the app that was active
-    /// when dictation started. If Accessibility is unavailable, the text stays
-    /// safely on the clipboard for a manual paste.
+    /// Inserts text into the app that owned focus when dictation started.
+    /// Direct Accessibility insertion is attempted first; the clipboard is
+    /// used only as a compatibility fallback.
     static func insert(
         _ text: String,
         into targetPID: pid_t?,
         promptForAccessibility: Bool
     ) async -> Bool {
         guard !text.isEmpty else { return false }
-        copy(text)
 
         guard isAccessibilityTrusted(prompt: promptForAccessibility) else {
+            copy(text)
             return false
         }
 
         if let targetPID {
             await activateApplication(pid: targetPID)
+            if let element = focusedElement(for: targetPID),
+               AXUIElementSetAttributeValue(
+                   element,
+                   "AXSelectedText" as CFString,
+                   text as CFString
+               ) == .success {
+                return true
+            }
+        } else if let element = systemFocusedElement(),
+                  AXUIElementSetAttributeValue(
+                      element,
+                      "AXSelectedText" as CFString,
+                      text as CFString
+                  ) == .success {
+            return true
         }
 
-        return postPasteShortcut()
+        return await pasteTemporarily(text)
+    }
+
+    private static func selectionStillMatches(
+        _ context: TextSelectionContext,
+        in element: AXUIElement
+    ) -> Bool {
+        guard stringAttribute("AXSelectedText", from: element) == context.selectedText else {
+            return false
+        }
+
+        guard let selectionLocation = context.selectionLocation,
+              let selectionLength = context.selectionLength
+        else {
+            return true
+        }
+
+        guard let currentRange = selectedTextRange(from: element) else {
+            return false
+        }
+        return currentRange.location == selectionLocation && currentRange.length == selectionLength
     }
 
     private static func systemFocusedElement() -> AXUIElement? {
@@ -173,6 +214,27 @@ enum TextInserter {
         return value as? String
     }
 
+    private static func selectedTextRange(from element: AXUIElement) -> (location: Int, length: Int)? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            "AXSelectedTextRange" as CFString,
+            &value
+        ) == .success,
+        let value,
+        CFGetTypeID(value) == AXValueGetTypeID()
+        else {
+            return nil
+        }
+
+        let axValue = unsafeBitCast(value, to: AXValue.self)
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range) else {
+            return nil
+        }
+        return (location: range.location, length: range.length)
+    }
+
     private static func activateApplication(pid: pid_t) async {
         guard pid != ProcessInfo.processInfo.processIdentifier,
               let app = NSRunningApplication(processIdentifier: pid)
@@ -181,10 +243,35 @@ enum TextInserter {
         }
 
         app.activate(options: [.activateIgnoringOtherApps])
-        try? await Task.sleep(nanoseconds: 160_000_000)
+        try? await Task.sleep(for: .milliseconds(160))
     }
 
-    private static func postPasteShortcut() -> Bool {
+    private static func pasteTemporarily(_ text: String) async -> Bool {
+        let pasteboard = NSPasteboard.general
+        let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
+        write(text, to: pasteboard)
+        let toolChangeCount = pasteboard.changeCount
+
+        guard await postPasteShortcut() else {
+            snapshot.restore(to: pasteboard, ifChangeCountIs: toolChangeCount)
+            return false
+        }
+
+        // Most targets read the pasteboard synchronously while handling Cmd+V.
+        // Restore only if nobody has changed it since our temporary write.
+        try? await Task.sleep(for: .milliseconds(250))
+        snapshot.restore(to: pasteboard, ifChangeCountIs: toolChangeCount)
+        return true
+    }
+
+    private static func write(_ text: String, to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    private static func postPasteShortcut() async -> Bool {
+        await waitForHotKeyModifiersToRelease()
+
         guard
             let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(9), keyDown: true),
             let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(9), keyDown: false)
@@ -197,5 +284,40 @@ enum TextInserter {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
         return true
+    }
+
+    private static func waitForHotKeyModifiersToRelease() async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(250))
+        let hotKeyModifiers: NSEvent.ModifierFlags = [.control, .option]
+
+        while !NSEvent.modifierFlags.intersection(hotKeyModifiers).isEmpty,
+              clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+    }
+}
+
+private struct PasteboardSnapshot {
+    private let items: [NSPasteboardItem]
+
+    init(pasteboard: NSPasteboard) {
+        items = (pasteboard.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+    }
+
+    func restore(to pasteboard: NSPasteboard, ifChangeCountIs expectedChangeCount: Int) {
+        guard pasteboard.changeCount == expectedChangeCount else { return }
+        pasteboard.clearContents()
+        if !items.isEmpty {
+            pasteboard.writeObjects(items)
+        }
     }
 }

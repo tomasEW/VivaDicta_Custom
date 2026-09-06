@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import AudioRecording
+import ChineseTextConversion
 import CloudTranscription
 import Keychain
 import LocalTranscription
@@ -99,6 +100,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var speakToEditResult = ""
     @Published private(set) var statusText = "準備就緒"
     @Published private(set) var errorText: String?
+    @Published private(set) var dictationHotKeyIsRegistered = false
+    @Published private(set) var speakToEditHotKeyIsRegistered = false
+    @Published private(set) var dictationHotKeyRegistrationErrorCode: Int32?
+    @Published private(set) var speakToEditHotKeyRegistrationErrorCode: Int32?
 
     private let recorder = DefaultAudioRecordingService()
     private let keychain = DefaultKeychainService(service: "com.tomasew.VivaDictaMac")
@@ -108,6 +113,8 @@ final class AppModel: ObservableObject {
     private var targetPID: pid_t?
     private var recordingWorkflow: RecordingWorkflow = .dictation
     private var savedGroqAPIKey = ""
+    private var processingTask: Task<Void, Never>?
+    private var activeProcessingID: UUID?
 
     private let groqKeychainKey = "groq_api_key"
 
@@ -139,6 +146,9 @@ final class AppModel: ObservableObject {
             },
             speakToEditCallback: { [weak self] in
                 self?.toggleSpeakToEdit()
+            },
+            registrationStateDidChange: { [weak self] state in
+                self?.updateHotKeyRegistrationState(state)
             }
         )
     }
@@ -148,15 +158,7 @@ final class AppModel: ObservableObject {
     }
 
     var hotKeyIsRegistered: Bool {
-        hotKey?.isRegistered ?? false
-    }
-
-    var dictationHotKeyIsRegistered: Bool {
-        hotKey?.dictationIsRegistered ?? false
-    }
-
-    var speakToEditHotKeyIsRegistered: Bool {
-        hotKey?.speakToEditIsRegistered ?? false
+        dictationHotKeyIsRegistered && speakToEditHotKeyIsRegistered
     }
 
     func saveGroqAPIKey() {
@@ -192,7 +194,7 @@ final class AppModel: ObservableObject {
     }
 
     func toggleRecording(captureTarget: Bool = false) {
-        guard !isProcessing, !isDownloadingLocalModel else { return }
+        guard !isProcessing, !isRefining, !isDownloadingLocalModel else { return }
         if isRecording {
             stopAndTranscribe()
         } else {
@@ -201,7 +203,7 @@ final class AppModel: ObservableObject {
     }
 
     func toggleSpeakToEdit() {
-        guard !isProcessing, !isDownloadingLocalModel else { return }
+        guard !isProcessing, !isRefining, !isDownloadingLocalModel else { return }
 
         if isRecording {
             stopAndTranscribe()
@@ -239,25 +241,50 @@ final class AppModel: ObservableObject {
             errorText = "精練需要 Groq API Key。"
             return
         }
-        guard !isRefining else { return }
+        guard !isProcessing, !isRefining else { return }
 
+        let processingID = UUID()
+        activeProcessingID = processingID
         isRefining = true
         statusText = "AI 精練中…"
         errorText = nil
-        Task {
-            defer { isRefining = false }
+        processingTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishProcessing(processingID) }
             do {
-                transcript = try await refineTranscript(source)
-                statusText = "精練完成"
+                let refined = try await self.refineTranscript(source)
+                try self.ensureActiveProcessing(processingID)
+                self.transcript = self.finalizedOutput(refined)
+                self.statusText = "精練完成"
+            } catch is CancellationError {
+                guard self.activeProcessingID == processingID else { return }
+                self.statusText = "已取消 AI 精練"
             } catch {
-                errorText = "精練失敗：\(error.localizedDescription)"
-                statusText = "精練失敗；保留原始文字"
+                guard self.activeProcessingID == processingID else { return }
+                self.errorText = "精練失敗：\(error.localizedDescription)"
+                self.statusText = "精練失敗；保留原始文字"
             }
         }
     }
 
+    func cancelActiveProcessing() {
+        guard isProcessing || isRefining else { return }
+        activeProcessingID = nil
+        processingTask?.cancel()
+        processingTask = nil
+        isProcessing = false
+        isRefining = false
+        statusText = "已取消處理"
+        errorText = nil
+    }
+
+    func retryGlobalHotKeys() {
+        hotKey?.retryRegistration()
+    }
+
     func insertTranscriptNow() {
         guard !transcript.isEmpty else { return }
+        transcript = finalizedOutput(transcript)
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         Task {
             let inserted = await TextInserter.insert(transcript, into: pid, promptForAccessibility: true)
@@ -266,6 +293,7 @@ final class AppModel: ObservableObject {
     }
 
     func copyTranscript() {
+        transcript = finalizedOutput(transcript)
         TextInserter.copy(transcript)
         statusText = "已複製最後輸出"
     }
@@ -432,32 +460,35 @@ final class AppModel: ObservableObject {
         }
         errorText = nil
 
-        Task {
+        let processingID = UUID()
+        activeProcessingID = processingID
+        processingTask = Task { [weak self] in
+            guard let self else { return }
             defer {
-                isProcessing = false
+                self.finishProcessing(processingID)
                 try? FileManager.default.removeItem(at: audioURL)
             }
 
             do {
                 let resultText: String
-                switch backend {
+                switch self.backend {
                 case .groq:
                     let service = GroqTranscriptionService(
                         config: .init(
-                            apiKey: groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                            apiKey: self.groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines),
                             modelName: Self.groqModelName,
-                            language: language
+                            language: self.language
                         )
                     )
                     resultText = try await service.transcribe(audioURL: audioURL).text
 
                 case .local:
                     let options = WhisperKitTranscriptionService.Options(
-                        language: language,
+                        language: self.language,
                         isVADEnabled: true,
                         isSpeakerDiarizationEnabled: false
                     )
-                    resultText = try await localTranscriber.transcribe(
+                    resultText = try await self.localTranscriber.transcribe(
                         audioURL: audioURL,
                         modelName: Self.localModelName,
                         displayName: "Whisper Large V3 Turbo 632MB",
@@ -465,82 +496,128 @@ final class AppModel: ObservableObject {
                     ).text
                 }
 
-                rawTranscript = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
-                transcript = rawTranscript
-                guard !rawTranscript.isEmpty else {
+                try self.ensureActiveProcessing(processingID)
+                self.rawTranscript = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.transcript = self.finalizedOutput(self.rawTranscript)
+                guard !self.rawTranscript.isEmpty else {
                     switch workflow {
                     case .dictation:
-                        statusText = "沒有辨識到文字"
+                        self.statusText = "沒有辨識到文字"
                     case .speakToEdit:
-                        statusText = "沒有辨識到編輯指令"
+                        self.statusText = "沒有辨識到編輯指令"
                     }
                     return
                 }
 
                 if case .speakToEdit(let context) = workflow {
-                    speakToEditInstruction = rawTranscript
-                    statusText = "指令已辨識，AI 改寫選取文字中…"
-                    isRefining = true
+                    self.speakToEditInstruction = self.rawTranscript
+                    self.statusText = "指令已辨識，AI 改寫選取文字中…"
+                    self.isRefining = true
 
                     do {
-                        let editedText = try await applyVoiceInstruction(
-                            instruction: rawTranscript,
+                        let editedText = try await self.applyVoiceInstruction(
+                            instruction: self.rawTranscript,
                             to: context.selectedText
                         )
-                        transcript = editedText
-                        speakToEditResult = editedText
-                        isRefining = false
+                        try self.ensureActiveProcessing(processingID)
+                        let output = self.finalizedOutput(editedText)
+                        self.transcript = output
+                        self.speakToEditResult = output
+                        self.isRefining = false
 
                         let replaced = await TextInserter.replaceSelection(
-                            with: editedText,
+                            with: output,
                             context: context,
                             promptForAccessibility: true
                         )
+                        try self.ensureActiveProcessing(processingID)
 
                         if replaced {
-                            statusText = "Speak to Edit 完成，已取代原本選取文字"
+                            self.statusText = "Speak to Edit 完成，已取代原本選取文字"
                         } else {
-                            statusText = "改寫完成，但選取位置已改變；結果已複製到剪貼簿"
-                            errorText = "為避免改到錯誤位置，VivaDicta 沒有自動貼入。請確認原選取文字仍在原位置後手動貼上。"
+                            self.statusText = "改寫完成，但選取位置已改變；結果已複製到剪貼簿"
+                            self.errorText = "為避免改到錯誤位置，VivaDicta 沒有自動貼入。請確認原選取文字仍在原位置後手動貼上。"
                         }
+                    } catch is CancellationError {
+                        self.isRefining = false
+                        throw CancellationError()
                     } catch {
-                        isRefining = false
-                        transcript = context.selectedText
-                        speakToEditResult = ""
-                        errorText = "Speak to Edit 失敗：\(error.localizedDescription)"
-                        statusText = "Speak to Edit 失敗；原文未變更"
+                        guard self.activeProcessingID == processingID else { return }
+                        self.isRefining = false
+                        self.transcript = context.selectedText
+                        self.speakToEditResult = ""
+                        self.errorText = "Speak to Edit 失敗：\(error.localizedDescription)"
+                        self.statusText = "Speak to Edit 失敗；原文未變更"
                     }
                     return
                 }
 
-                if refinementEnabled {
-                    statusText = "ASR 完成，AI 精練中…"
-                    isRefining = true
+                if self.refinementEnabled {
+                    self.statusText = "ASR 完成，AI 精練中…"
+                    self.isRefining = true
                     do {
-                        transcript = try await refineTranscript(rawTranscript)
+                        let refined = try await self.refineTranscript(self.rawTranscript)
+                        try self.ensureActiveProcessing(processingID)
+                        self.transcript = self.finalizedOutput(refined)
                     } catch {
-                        transcript = rawTranscript
-                        errorText = "精練失敗，已保留原始 ASR 文字：\(error.localizedDescription)"
+                        if error is CancellationError {
+                            throw error
+                        }
+                        self.transcript = self.finalizedOutput(self.rawTranscript)
+                        self.errorText = "精練失敗，已保留原始 ASR 文字：\(error.localizedDescription)"
                     }
-                    isRefining = false
+                    self.isRefining = false
                 }
 
-                if autoInsert, let targetPID {
-                    let inserted = await TextInserter.insert(transcript, into: targetPID, promptForAccessibility: true)
+                if self.autoInsert, let targetPID = self.targetPID {
+                    let inserted = await TextInserter.insert(self.transcript, into: targetPID, promptForAccessibility: true)
+                    try self.ensureActiveProcessing(processingID)
                     if inserted {
-                        statusText = refinementEnabled ? "轉錄、精練完成並已貼入" : "轉錄完成並已貼入"
+                        self.statusText = self.refinementEnabled ? "轉錄、精練完成並已貼入" : "轉錄完成並已貼入"
                     } else {
-                        statusText = refinementEnabled ? "轉錄、精練完成；已複製到剪貼簿" : "轉錄完成；已複製到剪貼簿"
+                        self.statusText = self.refinementEnabled ? "轉錄、精練完成；已複製到剪貼簿" : "轉錄完成；已複製到剪貼簿"
                     }
                 } else {
-                    statusText = refinementEnabled ? "轉錄與精練完成" : "轉錄完成"
+                    self.statusText = self.refinementEnabled ? "轉錄與精練完成" : "轉錄完成"
                 }
+            } catch is CancellationError {
+                guard self.activeProcessingID == processingID else { return }
+                self.isRefining = false
+                self.statusText = "已取消處理"
             } catch {
-                isRefining = false
-                errorText = "轉錄失敗：\(error.localizedDescription)"
-                statusText = "轉錄失敗"
+                guard self.activeProcessingID == processingID else { return }
+                self.isRefining = false
+                self.errorText = "轉錄失敗：\(error.localizedDescription)"
+                self.statusText = "轉錄失敗"
             }
         }
+    }
+
+    private func finalizedOutput(_ text: String) -> String {
+        ChineseTextConverter.traditionalized(text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func ensureActiveProcessing(_ processingID: UUID) throws {
+        try Task.checkCancellation()
+        guard activeProcessingID == processingID else {
+            throw CancellationError()
+        }
+    }
+
+    private func finishProcessing(_ processingID: UUID) {
+        guard activeProcessingID == processingID else { return }
+        activeProcessingID = nil
+        processingTask = nil
+        isProcessing = false
+        isRefining = false
+    }
+
+    private func updateHotKeyRegistrationState(_ state: GlobalHotKeyRegistrationState) {
+        dictationHotKeyIsRegistered = state.dictationIsRegistered
+        speakToEditHotKeyIsRegistered = state.speakToEditIsRegistered
+        dictationHotKeyRegistrationErrorCode = state.dictationIsRegistered ? nil : Int32(state.dictationStatus)
+        speakToEditHotKeyRegistrationErrorCode = state.speakToEditIsRegistered ? nil : Int32(state.speakToEditStatus)
     }
 
     private func refineTranscript(_ text: String) async throws -> String {
