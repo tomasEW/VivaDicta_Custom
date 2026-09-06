@@ -10,6 +10,8 @@ struct TextSelectionContext: Sendable, Equatable {
 
 @MainActor
 enum TextInserter {
+    private static let antigravityBundleIdentifier = "com.google.antigravity"
+
     static func isAccessibilityTrusted(prompt: Bool) -> Bool {
         // Using the SDK's kAXTrustedCheckOptionPrompt global directly triggers
         // Swift 6 strict-concurrency diagnostics because it is imported as
@@ -89,16 +91,27 @@ enum TextInserter {
             return false
         }
 
-        let setStatus = AXUIElementSetAttributeValue(
-            element,
-            "AXSelectedText" as CFString,
-            text as CFString
-        )
-        if setStatus == .success {
-            return true
+        // Chromium/Electron accessibility bridges can report a successful
+        // AXSelectedText write without updating the web editor's actual
+        // value. Anti-Gravity is one of those hosts, so use the same paste
+        // path a user uses and leave the result available for recovery.
+        let antiGravityTarget = isAntiGravity(pid: context.targetPID)
+        if !antiGravityTarget {
+            let setStatus = AXUIElementSetAttributeValue(
+                element,
+                "AXSelectedText" as CFString,
+                text as CFString
+            )
+            if setStatus == .success {
+                return true
+            }
         }
 
-        return await pasteTemporarily(text)
+        return await pasteTemporarily(
+            text,
+            targetPID: antiGravityTarget ? context.targetPID : nil,
+            restoreClipboard: !antiGravityTarget
+        )
     }
 
     /// Inserts text into the app that owned focus when dictation started.
@@ -118,6 +131,19 @@ enum TextInserter {
 
         if let targetPID {
             await activateApplication(pid: targetPID)
+            let antiGravityTarget = isAntiGravity(pid: targetPID)
+
+            // Anti-Gravity's Chromium accessibility layer can return
+            // AXError.success for AXSelectedText while dropping the write.
+            // Use a real Cmd+V for that host and verify its AXValue changed.
+            if antiGravityTarget {
+                return await pasteTemporarily(
+                    text,
+                    targetPID: targetPID,
+                    restoreClipboard: false
+                )
+            }
+
             if let element = focusedElement(for: targetPID),
                AXUIElementSetAttributeValue(
                    element,
@@ -246,22 +272,49 @@ enum TextInserter {
         try? await Task.sleep(for: .milliseconds(160))
     }
 
-    private static func pasteTemporarily(_ text: String) async -> Bool {
+    private static func pasteTemporarily(
+        _ text: String,
+        targetPID: pid_t? = nil,
+        restoreClipboard: Bool = true
+    ) async -> Bool {
         let pasteboard = NSPasteboard.general
         let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
         write(text, to: pasteboard)
         let toolChangeCount = pasteboard.changeCount
 
         guard await postPasteShortcut() else {
-            snapshot.restore(to: pasteboard, ifChangeCountIs: toolChangeCount)
+            if restoreClipboard {
+                snapshot.restore(to: pasteboard, ifChangeCountIs: toolChangeCount)
+            }
             return false
         }
 
-        // Most targets read the pasteboard synchronously while handling Cmd+V.
-        // Restore only if nobody has changed it since our temporary write.
-        try? await Task.sleep(for: .milliseconds(250))
-        snapshot.restore(to: pasteboard, ifChangeCountIs: toolChangeCount)
-        return true
+        // Electron hosts need a little longer for the web editor to reflect
+        // the native paste. Verify the value when a target PID is available;
+        // this prevents AXSelectedText/CGEvent success from being reported as
+        // a visible insertion when the web input ignored it.
+        try? await Task.sleep(for: .milliseconds(300))
+
+        let inserted = targetPID.map { pid in
+            guard let element = focusedElement(for: pid),
+                  let value = stringAttribute("AXValue", from: element)
+            else {
+                return false
+            }
+            return value.contains(text)
+        } ?? true
+
+        if restoreClipboard {
+            // Restore only if nobody has changed the pasteboard since our
+            // temporary write. If verification failed, the caller still gets
+            // an accurate false result instead of a false "貼入" status.
+            snapshot.restore(to: pasteboard, ifChangeCountIs: toolChangeCount)
+        }
+        return inserted
+    }
+
+    private static func isAntiGravity(pid: pid_t) -> Bool {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == antigravityBundleIdentifier
     }
 
     private static func write(_ text: String, to pasteboard: NSPasteboard) {
