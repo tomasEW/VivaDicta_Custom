@@ -100,6 +100,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var speakToEditResult = ""
     @Published private(set) var statusText = "準備就緒"
     @Published private(set) var errorText: String?
+    @Published private(set) var failedRecordingName: String?
     @Published private(set) var dictationHotKeyIsRegistered = false
     @Published private(set) var speakToEditHotKeyIsRegistered = false
     @Published private(set) var dictationHotKeyRegistrationErrorCode: Int32?
@@ -115,8 +116,10 @@ final class AppModel: ObservableObject {
     private var savedGroqAPIKey = ""
     private var processingTask: Task<Void, Never>?
     private var activeProcessingID: UUID?
+    private var failedRecordingURL: URL?
 
     private let groqKeychainKey = "groq_api_key"
+    private let failedRecordingPathKey = "failedRecordingPath"
 
     init() {
         let defaults = UserDefaults.standard
@@ -130,6 +133,7 @@ final class AppModel: ObservableObject {
         groqAPIKey = storedGroqAPIKey
         savedGroqAPIKey = storedGroqAPIKey
         groqAPIKeyStorageState = storedGroqAPIKey.isEmpty ? .missing : .saved
+        restoreFailedRecording()
 
         recorder.onDidFinishUnsuccessfully = { [weak self] in
             self?.isRecording = false
@@ -303,6 +307,49 @@ final class AppModel: ObservableObject {
         statusText = "已複製原始 ASR 文字"
     }
 
+    var hasFailedRecording: Bool {
+        failedRecordingURL != nil
+    }
+
+    func retryFailedRecording() {
+        guard let audioURL = failedRecordingURL,
+              FileManager.default.fileExists(atPath: audioURL.path)
+        else {
+            clearFailedRecordingState()
+            errorText = "找不到保留的失敗錄音。"
+            statusText = "失敗錄音不存在"
+            return
+        }
+        guard !isProcessing, !isRefining, !isRecording, !isDownloadingLocalModel else { return }
+
+        errorText = nil
+        statusText = backend == .groq ? "重新送到 Groq 轉錄中…" : "重新執行本地轉錄中…"
+        isProcessing = true
+        startTranscriptionTask(
+            audioURL: audioURL,
+            workflow: .dictation,
+            audioLifecycle: .retained
+        )
+    }
+
+    func revealFailedRecording() {
+        guard let audioURL = failedRecordingURL,
+              FileManager.default.fileExists(atPath: audioURL.path)
+        else {
+            clearFailedRecordingState()
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([audioURL])
+    }
+
+    func discardFailedRecording() {
+        guard let audioURL = failedRecordingURL else { return }
+        try? FileManager.default.removeItem(at: audioURL)
+        clearFailedRecordingState()
+        statusText = "已刪除保留的失敗錄音"
+        errorText = nil
+    }
+
     func downloadLocalModel() {
         guard !isDownloadingLocalModel, !isLocalModelReady else { return }
         isDownloadingLocalModel = true
@@ -460,15 +507,34 @@ final class AppModel: ObservableObject {
         }
         errorText = nil
 
+        startTranscriptionTask(
+            audioURL: audioURL,
+            workflow: workflow,
+            audioLifecycle: .transient
+        )
+    }
+
+    private enum AudioLifecycle: Equatable {
+        case transient
+        case retained
+    }
+
+    private func startTranscriptionTask(
+        audioURL: URL,
+        workflow: RecordingWorkflow,
+        audioLifecycle: AudioLifecycle
+    ) {
         let processingID = UUID()
         activeProcessingID = processingID
         processingTask = Task { [weak self] in
             guard let self else { return }
+            var shouldRemoveAudio = audioLifecycle == .transient
             defer {
                 self.finishProcessing(processingID)
-                try? FileManager.default.removeItem(at: audioURL)
+                if shouldRemoveAudio {
+                    try? FileManager.default.removeItem(at: audioURL)
+                }
             }
-
             do {
                 let resultText: String
                 switch self.backend {
@@ -580,6 +646,11 @@ final class AppModel: ObservableObject {
                 } else {
                     self.statusText = self.refinementEnabled ? "轉錄與精練完成" : "轉錄完成"
                 }
+
+                if audioLifecycle == .retained {
+                    shouldRemoveAudio = true
+                    self.clearFailedRecordingState()
+                }
             } catch is CancellationError {
                 guard self.activeProcessingID == processingID else { return }
                 self.isRefining = false
@@ -587,10 +658,62 @@ final class AppModel: ObservableObject {
             } catch {
                 guard self.activeProcessingID == processingID else { return }
                 self.isRefining = false
-                self.errorText = "轉錄失敗：\(error.localizedDescription)"
-                self.statusText = "轉錄失敗"
+                if audioLifecycle == .transient,
+                   case .dictation = workflow,
+                   self.retainFailedRecording(from: audioURL) {
+                    shouldRemoveAudio = false
+                    self.errorText = "轉錄失敗：\(error.localizedDescription)；錄音已保留，可按「重試轉錄」。"
+                    self.statusText = "轉錄失敗；錄音已保留"
+                } else if audioLifecycle == .retained {
+                    self.errorText = "重新轉錄失敗：\(error.localizedDescription)；原始錄音仍已保留。"
+                    self.statusText = "重新轉錄失敗；錄音仍已保留"
+                } else {
+                    self.errorText = "轉錄失敗：\(error.localizedDescription)"
+                    self.statusText = "轉錄失敗"
+                }
             }
         }
+    }
+
+    private var failedRecordingDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport
+            .appendingPathComponent("VivaDictaMac", isDirectory: true)
+            .appendingPathComponent("FailedRecordings", isDirectory: true)
+    }
+
+    private func restoreFailedRecording() {
+        guard let path = UserDefaults.standard.string(forKey: failedRecordingPathKey) else { return }
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            UserDefaults.standard.removeObject(forKey: failedRecordingPathKey)
+            return
+        }
+        failedRecordingURL = url
+        failedRecordingName = url.lastPathComponent
+    }
+
+    @discardableResult
+    private func retainFailedRecording(from sourceURL: URL) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: failedRecordingDirectory, withIntermediateDirectories: true)
+            let destination = failedRecordingDirectory
+                .appendingPathComponent("Failed-\(UUID().uuidString)")
+                .appendingPathExtension(sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension)
+            try FileManager.default.moveItem(at: sourceURL, to: destination)
+            failedRecordingURL = destination
+            failedRecordingName = destination.lastPathComponent
+            UserDefaults.standard.set(destination.path, forKey: failedRecordingPathKey)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func clearFailedRecordingState() {
+        failedRecordingURL = nil
+        failedRecordingName = nil
+        UserDefaults.standard.removeObject(forKey: failedRecordingPathKey)
     }
 
     private func finalizedOutput(_ text: String) -> String {

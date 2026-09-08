@@ -22,6 +22,7 @@ struct ContentView: View {
                 speakToEditSection
                 recordingSection
                 transcriptSection
+                failedRecordingSection
                 statusSection
             }
             .padding(24)
@@ -299,6 +300,35 @@ struct ContentView: View {
                     "Speak to Edit 快捷鍵 ⌃⌥E 註冊失敗",
                     code: model.speakToEditHotKeyRegistrationErrorCode
                 )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var failedRecordingSection: some View {
+        if model.hasFailedRecording {
+            GroupBox("保留的失敗錄音") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("上次轉錄失敗，但原始音訊已保留。", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+
+                    if let name = model.failedRecordingName {
+                        Text(name)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+
+                    HStack {
+                        Button("重試轉錄") { model.retryFailedRecording() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.isProcessing || model.isRefining || model.isRecording || model.isDownloadingLocalModel)
+                        Button("在 Finder 顯示") { model.revealFailedRecording() }
+                        Spacer()
+                        Button("刪除錄音", role: .destructive) { model.discardFailedRecording() }
+                    }
+                }
+                .padding(8)
             }
         }
     }
