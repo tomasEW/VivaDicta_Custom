@@ -61,7 +61,22 @@ public struct GroqTranscriptionService: TranscriptionService, Sendable {
 
         let data: Data
         do {
-            (data, _) = try await networkService.upload(request, from: body)
+            // Read non-2xx responses ourselves so the retry loop can honour
+            // Groq's Retry-After header instead of losing it in NetworkError.
+            let response: HTTPURLResponse
+            (data, response) = try await networkService.upload(
+                request,
+                from: body,
+                acceptableStatusCodes: .acceptAny
+            )
+            guard (200..<300).contains(response.statusCode) else {
+                let message = String(data: data, encoding: .utf8) ?? "No error message"
+                throw NetworkRetry.RetryableHTTPError(
+                    statusCode: response.statusCode,
+                    message: message,
+                    retryAfter: RetryAfter.duration(from: response)
+                )
+            }
         } catch let error as NetworkError {
             throw error.asTranscriptionError()
         }

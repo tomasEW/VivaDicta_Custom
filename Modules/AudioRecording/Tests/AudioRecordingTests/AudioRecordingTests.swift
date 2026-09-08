@@ -81,6 +81,27 @@ struct DefaultAudioFileServiceTests {
         #expect(outFile.fileFormat.channelCount == 1)
         #expect(outFile.length > 0)
     }
+
+    @Test func validatorRejectsRecordingShorterThanMinimum() throws {
+        let source = try makeSineWaveFile(sampleRate: 16_000, durationSeconds: 0.2)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        #expect(try AudioRecordingValidator.validate(url: source) == .tooShort)
+    }
+
+    @Test func validatorRejectsSilenceWithoutCallingAProvider() throws {
+        let source = try makeSineWaveFile(sampleRate: 16_000, durationSeconds: 0.5, amplitude: 0)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        #expect(try AudioRecordingValidator.validate(url: source) == .silent)
+    }
+
+    @Test func validatorAcceptsAudibleRecording() throws {
+        let source = try makeSineWaveFile(sampleRate: 16_000, durationSeconds: 0.5)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        #expect(try AudioRecordingValidator.validate(url: source) == .valid)
+    }
 }
 
 struct DefaultAudioRecordingServiceTests {
@@ -145,7 +166,11 @@ private func makeTempFile(contents: Data) throws -> URL {
 /// Generate a short PCM Float32 WAV containing a 440 Hz sine wave. Used as
 /// real audio input so duration / downsample tests exercise actual decoding
 /// rather than relying on a fixture file checked into the repo.
-private func makeSineWaveFile(sampleRate: Double, durationSeconds: Double) throws -> URL {
+private func makeSineWaveFile(
+    sampleRate: Double,
+    durationSeconds: Double,
+    amplitude: Double = 0.25
+) throws -> URL {
     guard let format = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: sampleRate,
@@ -166,7 +191,7 @@ private func makeSineWaveFile(sampleRate: Double, durationSeconds: Double) throw
     let channel = buffer.floatChannelData![0]
     let twoPiF = 2.0 * .pi * 440.0
     for frame in 0..<Int(frameCount) {
-        channel[frame] = Float(sin(twoPiF * Double(frame) / sampleRate)) * 0.25
+        channel[frame] = Float(sin(twoPiF * Double(frame) / sampleRate) * amplitude)
     }
 
     let url = uniqueTempURL(extension: "wav")

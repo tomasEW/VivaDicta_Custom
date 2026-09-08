@@ -10,11 +10,10 @@ import TranscriptionCore
 /// Tests exercise `GroqTranscriptionService` end-to-end with a stubbed
 /// `MockNetworkService`. Verifies request shape (URL, method, headers,
 /// multipart body) and response handling (success, non-2xx, undecodable
-/// JSON), plus the Groq-specific vocabulary-prompt path.
+/// JSON), retry handling (including Retry-After), plus the Groq-specific
+/// vocabulary-prompt path.
 ///
-/// Mirrors the structure of `OpenAITranscriptionServiceTests`. Retry-path
-/// tests are intentionally skipped here - retry semantics belong on
-/// `NetworkRetry`'s own tests.
+/// Mirrors the structure of OpenAITranscriptionServiceTests.
 @Suite(.tags(.networking))
 struct GroqTranscriptionServiceTests {
 
@@ -26,12 +25,15 @@ struct GroqTranscriptionServiceTests {
         return url
     }
 
-    private func makeHTTPResponse(_ statusCode: Int) -> HTTPURLResponse {
+    private func makeHTTPResponse(
+        _ statusCode: Int,
+        headers: [String: String] = ["Content-Type": "application/json"]
+    ) -> HTTPURLResponse {
         HTTPURLResponse(
             url: URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!,
             statusCode: statusCode,
             httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: headers
         )!
     }
 
@@ -227,6 +229,30 @@ struct GroqTranscriptionServiceTests {
         }
         #expect(statusCode == 401)
         #expect(message.contains("invalid key"))
+        #expect(networkService.uploadCallCount == 1)
+    }
+
+    @Test func rateLimitHonorsRetryAfterAndRetries() async throws {
+        let networkService = MockNetworkService()
+        let retryBody = Data(#"{"error":{"message":"try again"}}"#.utf8)
+        let successBody = Data(#"{"text":"retried","language":"en","duration":0.5}"#.utf8)
+        networkService.stubUploadResponses = [
+            .success((
+                retryBody,
+                makeHTTPResponse(429, headers: [
+                    "Content-Type": "application/json",
+                    "Retry-After": "0"
+                ])
+            )),
+            .success((successBody, makeHTTPResponse(200)))
+        ]
+        let audio = try makeAudioFile()
+        let sut = makeService(networkService: networkService)
+
+        let result = try await sut.transcribe(audioURL: audio)
+
+        #expect(result.text == "retried")
+        #expect(networkService.uploadCallCount == 2)
     }
 
     @Test func undecodableJSONOn200ThrowsNoTranscriptionReturned() async throws {
