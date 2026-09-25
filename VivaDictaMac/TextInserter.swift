@@ -11,6 +11,16 @@ struct TextSelectionContext: Sendable, Equatable {
 @MainActor
 enum TextInserter {
     private static let antigravityBundleIdentifier = "com.google.antigravity"
+    private static let chromiumBundleIdentifiers: Set<String> = [
+        "com.google.Chrome",
+        "com.google.Chrome.beta",
+        "com.google.Chrome.canary",
+        "com.microsoft.edgemac",
+        "com.microsoft.edgemac.Beta",
+        "com.brave.Browser",
+        "com.operasoftware.Opera",
+        "com.vivaldi.Vivaldi"
+    ]
 
     static func isAccessibilityTrusted(prompt: Bool) -> Bool {
         // Using the SDK's kAXTrustedCheckOptionPrompt global directly triggers
@@ -131,12 +141,14 @@ enum TextInserter {
 
         if let targetPID {
             await activateApplication(pid: targetPID)
-            let antiGravityTarget = isAntiGravity(pid: targetPID)
+            let webEditorTarget = prefersPasteInsertion(pid: targetPID)
 
-            // Anti-Gravity's Chromium accessibility layer can return
-            // AXError.success for AXSelectedText while dropping the write.
-            // Use a real Cmd+V for that host and verify its AXValue changed.
-            if antiGravityTarget {
+            // Chromium/Electron web editors can return AXError.success for
+            // AXSelectedText while silently dropping the DOM update. For these
+            // hosts use the same Cmd+V path a user uses so contenteditable
+            // editors (Meta AI, ChatGPT, Gmail, etc.) receive normal paste
+            // events. Keep the generated text on the clipboard as recovery.
+            if webEditorTarget {
                 return await pasteTemporarily(
                     text,
                     targetPID: targetPID,
@@ -315,6 +327,15 @@ enum TextInserter {
 
     private static func isAntiGravity(pid: pid_t) -> Bool {
         NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == antigravityBundleIdentifier
+    }
+
+    private static func prefersPasteInsertion(pid: pid_t) -> Bool {
+        guard let bundleIdentifier = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else {
+            return false
+        }
+        return bundleIdentifier == antigravityBundleIdentifier
+            || chromiumBundleIdentifiers.contains(bundleIdentifier)
+            || bundleIdentifier.lowercased().contains("electron")
     }
 
     private static func write(_ text: String, to pasteboard: NSPasteboard) {
