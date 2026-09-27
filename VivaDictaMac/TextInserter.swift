@@ -124,9 +124,17 @@ enum TextInserter {
         )
     }
 
-    /// Inserts text into the app that owned focus when dictation started.
-    /// Direct Accessibility insertion is attempted first; the clipboard is
-    /// used only as a compatibility fallback.
+    /// Inserts normal dictation text into the app that owned focus when
+    /// dictation started.
+    ///
+    /// Do not use AXSelectedText as the primary insertion path here. WebView,
+    /// Chromium/Electron and other custom editors can return AXError.success
+    /// while silently dropping the visible edit. A real Cmd+V follows the same
+    /// event path as a user paste and is substantially more compatible.
+    ///
+    /// Accessibility is still required so we can safely synthesize the paste
+    /// shortcut. The generated text is intentionally left on the clipboard when
+    /// insertion cannot be verified, so the user can recover it manually.
     static func insert(
         _ text: String,
         into targetPID: pid_t?,
@@ -141,39 +149,18 @@ enum TextInserter {
 
         if let targetPID {
             await activateApplication(pid: targetPID)
-            let webEditorTarget = prefersPasteInsertion(pid: targetPID)
-
-            // Chromium/Electron web editors can return AXError.success for
-            // AXSelectedText while silently dropping the DOM update. For these
-            // hosts use the same Cmd+V path a user uses so contenteditable
-            // editors (Meta AI, ChatGPT, Gmail, etc.) receive normal paste
-            // events. Keep the generated text on the clipboard as recovery.
-            if webEditorTarget {
-                return await pasteTemporarily(
-                    text,
-                    targetPID: targetPID,
-                    restoreClipboard: false
-                )
-            }
-
-            if let element = focusedElement(for: targetPID),
-               AXUIElementSetAttributeValue(
-                   element,
-                   "AXSelectedText" as CFString,
-                   text as CFString
-               ) == .success {
-                return true
-            }
-        } else if let element = systemFocusedElement(),
-                  AXUIElementSetAttributeValue(
-                      element,
-                      "AXSelectedText" as CFString,
-                      text as CFString
-                  ) == .success {
-            return true
+            return await pasteTemporarily(
+                text,
+                targetPID: targetPID,
+                restoreClipboard: false
+            )
         }
 
-        return await pasteTemporarily(text)
+        // No captured target means the dictation was started from inside
+        // VivaDicta itself or an unknown focus state. Copy for recovery rather
+        // than risking a paste into an unrelated application.
+        copy(text)
+        return false
     }
 
     private static func selectionStillMatches(
