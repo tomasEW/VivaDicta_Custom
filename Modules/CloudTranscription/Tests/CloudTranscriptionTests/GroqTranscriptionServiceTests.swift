@@ -171,11 +171,11 @@ struct GroqTranscriptionServiceTests {
         #expect(bodyString.contains("name=\"prompt\"") == false)
     }
 
-    @Test func bodyIncludesPromptFieldWhenVocabularyProvided() async throws {
+    @Test func bodyIncludesPlainVocabularyPromptWhenLanguageIsSet() async throws {
         let networkService = MockNetworkService()
         stubSuccess(on: networkService, text: "ok")
         let audio = try makeAudioFile()
-        let sut = makeService(networkService: networkService, vocabulary: ["SwiftUI", "Kubernetes"])
+        let sut = makeService(networkService: networkService, language: "zh", vocabulary: ["SwiftUI", "Kubernetes"])
 
         _ = try await sut.transcribe(audioURL: audio)
 
@@ -183,7 +183,20 @@ struct GroqTranscriptionServiceTests {
         let bodyString = try #require(String(data: body, encoding: .utf8))
         #expect(bodyString.contains("name=\"prompt\""))
         #expect(bodyString.contains("SwiftUI, Kubernetes"))
-        #expect(bodyString.contains("Prefer these spellings"))
+        #expect(bodyString.contains("Prefer these spellings") == false)
+    }
+
+    @Test func bodyOmitsPromptFieldWhenLanguageIsAuto() async throws {
+        let networkService = MockNetworkService()
+        stubSuccess(on: networkService, text: "ok")
+        let audio = try makeAudioFile()
+        let sut = makeService(networkService: networkService, language: "auto", vocabulary: ["SwiftUI", "Kubernetes"])
+
+        _ = try await sut.transcribe(audioURL: audio)
+
+        let body = try #require(networkService.capturedBody)
+        let bodyString = try #require(String(data: body, encoding: .utf8))
+        #expect(bodyString.contains("name=\"prompt\"") == false)
     }
 
     // MARK: - Validation / short-circuit
